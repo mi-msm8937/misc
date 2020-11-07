@@ -1,0 +1,501 @@
+From 403ec619b4e97c334fe44d2c14486de31e3a7d91 Mon Sep 17 00:00:00 2001
+From: LuK1337 <priv.luk@gmail.com>
+Date: Mon, 31 Aug 2020 16:39:27 +0200
+Subject: [PATCH] Revert "msm: kgsl: Mark the scratch buffer as privileged"
+
+This reverts commit 76518d99f872d988bb7b789486094219782b0921.
+---
+ drivers/gpu/msm/adreno.c              | 15 +--------
+ drivers/gpu/msm/adreno.h              |  9 +++---
+ drivers/gpu/msm/adreno_a5xx.c         | 15 ++++-----
+ drivers/gpu/msm/adreno_a5xx.h         |  4 +--
+ drivers/gpu/msm/adreno_a5xx_preempt.c |  8 ++---
+ drivers/gpu/msm/adreno_a6xx.c         |  4 +--
+ drivers/gpu/msm/adreno_a6xx.h         |  4 +--
+ drivers/gpu/msm/adreno_a6xx_preempt.c | 35 ++++++++++----------
+ drivers/gpu/msm/adreno_ioctl.c        |  4 +--
+ drivers/gpu/msm/adreno_pm4types.h     |  4 +--
+ drivers/gpu/msm/adreno_ringbuffer.c   | 46 ++-------------------------
+ drivers/gpu/msm/adreno_ringbuffer.h   |  5 +--
+ drivers/gpu/msm/kgsl.h                | 13 ++++++--
+ 13 files changed, 56 insertions(+), 110 deletions(-)
+
+diff --git a/drivers/gpu/msm/adreno.c b/drivers/gpu/msm/adreno.c
+index be168688ae8d..ea2240cb1609 100644
+--- a/drivers/gpu/msm/adreno.c
++++ b/drivers/gpu/msm/adreno.c
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2002,2007-2018,2020, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2002,2007-2018, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -3818,19 +3818,6 @@ static void adreno_gpu_model(struct kgsl_device *device, char *str,
+ 			 ADRENO_CHIPID_PATCH(adreno_dev->chipid) + 1);
+ }
+ 
+-u32 adreno_get_ucode_version(const u32 *data)
+-{
+-	u32 version;
+-
+-	version = data[1];
+-
+-	if ((version & 0xf) != 0xa)
+-		return version;
+-
+-	version &= ~0xfff;
+-	return  version | ((data[3] & 0xfff000) >> 12);
+-}
+-
+ static const struct kgsl_functable adreno_functable = {
+ 	/* Mandatory functions */
+ 	.regread = adreno_regread,
+diff --git a/drivers/gpu/msm/adreno.h b/drivers/gpu/msm/adreno.h
+index 43125221826a..3b5dd88d63f8 100644
+--- a/drivers/gpu/msm/adreno.h
++++ b/drivers/gpu/msm/adreno.h
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2008-2018,2020, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2008-2018, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -277,8 +277,8 @@ enum adreno_preempt_states {
+ /**
+  * struct adreno_preemption
+  * @state: The current state of preemption
+- * @scratch: Memory descriptor for the memory where the GPU writes the
+- * current ctxt record address and preemption counters on switch
++ * @counters: Memory descriptor for the memory where the GPU writes the
++ * preemption counters on switch
+  * @timer: A timer to make sure preemption doesn't stall
+  * @work: A work struct for the preemption worker (for 5XX)
+  * @token_submit: Indicates if a preempt token has been submitted in
+@@ -290,7 +290,7 @@ enum adreno_preempt_states {
+  */
+ struct adreno_preemption {
+ 	atomic_t state;
+-	struct kgsl_memdesc scratch;
++	struct kgsl_memdesc counters;
+ 	struct timer_list timer;
+ 	struct work_struct work;
+ 	bool token_submit;
+@@ -1178,7 +1178,6 @@ void adreno_cx_misc_regrmw(struct adreno_device *adreno_dev,
+ 		unsigned int offsetwords,
+ 		unsigned int mask, unsigned int bits);
+ 
+-u32 adreno_get_ucode_version(const u32 *data);
+ 
+ #define ADRENO_TARGET(_name, _id) \
+ static inline int adreno_is_##_name(struct adreno_device *adreno_dev) \
+diff --git a/drivers/gpu/msm/adreno_a5xx.c b/drivers/gpu/msm/adreno_a5xx.c
+index 2e2718c803ab..68a7c2a2f987 100644
+--- a/drivers/gpu/msm/adreno_a5xx.c
++++ b/drivers/gpu/msm/adreno_a5xx.c
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2014-2018,2020, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -2168,15 +2168,12 @@ static int a5xx_post_start(struct adreno_device *adreno_dev)
+ 		*cmds++ = 0xF;
+ 	}
+ 
+-	if (adreno_is_preemption_enabled(adreno_dev)) {
++	if (adreno_is_preemption_enabled(adreno_dev))
+ 		cmds += _preemption_init(adreno_dev, rb, cmds, NULL);
+-		rb->_wptr = rb->_wptr - (42 - (cmds - start));
+-		ret = adreno_ringbuffer_submit_spin_nosync(rb, NULL, 2000);
+-	} else {
+-		rb->_wptr = rb->_wptr - (42 - (cmds - start));
+-		ret = adreno_ringbuffer_submit_spin(rb, NULL, 2000);
+-	}
+ 
++	rb->_wptr = rb->_wptr - (42 - (cmds - start));
++
++	ret = adreno_ringbuffer_submit_spin(rb, NULL, 2000);
+ 	if (ret)
+ 		adreno_spin_idle_debug(adreno_dev,
+ 				"hw initialization failed to idle\n");
+@@ -2514,7 +2511,7 @@ static int _load_firmware(struct kgsl_device *device, const char *fwfile,
+ 
+ 	memcpy(firmware->memdesc.hostptr, &fw->data[4], fw->size - 4);
+ 	firmware->size = (fw->size - 4) / sizeof(uint32_t);
+-	firmware->version = adreno_get_ucode_version((u32 *)fw->data);
++	firmware->version = *(unsigned int *)&fw->data[4];
+ 
+ done:
+ 	release_firmware(fw);
+diff --git a/drivers/gpu/msm/adreno_a5xx.h b/drivers/gpu/msm/adreno_a5xx.h
+index 1d81f9cc5424..3d89d73df317 100644
+--- a/drivers/gpu/msm/adreno_a5xx.h
++++ b/drivers/gpu/msm/adreno_a5xx.h
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2015-2017,2020, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -112,7 +112,7 @@ void a5xx_crashdump_init(struct adreno_device *adreno_dev);
+ 
+ void a5xx_hwcg_set(struct adreno_device *adreno_dev, bool on);
+ 
+-#define A5XX_CP_RB_CNTL_DEFAULT ((1 << 27) | ((ilog2(4) << 8) & 0x1F00) | \
++#define A5XX_CP_RB_CNTL_DEFAULT (((ilog2(4) << 8) & 0x1F00) | \
+ 		(ilog2(KGSL_RB_DWORDS >> 1) & 0x3F))
+ /* GPMU interrupt multiplexor */
+ #define FW_INTR_INFO			(0)
+diff --git a/drivers/gpu/msm/adreno_a5xx_preempt.c b/drivers/gpu/msm/adreno_a5xx_preempt.c
+index c7cfa51c3f0a..d5da56261d39 100644
+--- a/drivers/gpu/msm/adreno_a5xx_preempt.c
++++ b/drivers/gpu/msm/adreno_a5xx_preempt.c
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2014-2017,2020, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -575,7 +575,7 @@ static void a5xx_preemption_close(struct kgsl_device *device)
+ 	unsigned int i;
+ 
+ 	del_timer(&preempt->timer);
+-	kgsl_free_global(device, &preempt->scratch);
++	kgsl_free_global(device, &preempt->counters);
+ 	a5xx_preemption_iommu_close(adreno_dev);
+ 
+ 	FOR_EACH_RINGBUFFER(adreno_dev, rb, i) {
+@@ -602,14 +602,14 @@ int a5xx_preemption_init(struct adreno_device *adreno_dev)
+ 		(unsigned long) adreno_dev);
+ 
+ 	/* Allocate mem for storing preemption counters */
+-	ret = kgsl_allocate_global(device, &preempt->scratch,
++	ret = kgsl_allocate_global(device, &preempt->counters,
+ 		adreno_dev->num_ringbuffers *
+ 		A5XX_CP_CTXRECORD_PREEMPTION_COUNTER_SIZE, 0, 0,
+ 		"preemption_counters");
+ 	if (ret)
+ 		goto err;
+ 
+-	addr = preempt->scratch.gpuaddr;
++	addr = preempt->counters.gpuaddr;
+ 
+ 	/* Allocate mem for storing preemption switch record */
+ 	FOR_EACH_RINGBUFFER(adreno_dev, rb, i) {
+diff --git a/drivers/gpu/msm/adreno_a6xx.c b/drivers/gpu/msm/adreno_a6xx.c
+index 754e41987fe6..313b086128ca 100644
+--- a/drivers/gpu/msm/adreno_a6xx.c
++++ b/drivers/gpu/msm/adreno_a6xx.c
+@@ -1066,7 +1066,7 @@ static int a6xx_post_start(struct adreno_device *adreno_dev)
+ 
+ 	rb->_wptr = rb->_wptr - (42 - (cmds - start));
+ 
+-	ret = adreno_ringbuffer_submit_spin_nosync(rb, NULL, 2000);
++	ret = adreno_ringbuffer_submit_spin(rb, NULL, 2000);
+ 	if (ret)
+ 		adreno_spin_idle_debug(adreno_dev,
+ 			"hw preemption initialization failed to idle\n");
+@@ -1173,7 +1173,7 @@ static int _load_firmware(struct kgsl_device *device, const char *fwfile,
+ 	if (!ret) {
+ 		memcpy(firmware->memdesc.hostptr, &fw->data[4], fw->size - 4);
+ 		firmware->size = (fw->size - 4) / sizeof(uint32_t);
+-		firmware->version = adreno_get_ucode_version((u32 *)fw->data);
++		firmware->version = *(unsigned int *)&fw->data[4];
+ 	}
+ 
+ 	release_firmware(fw);
+diff --git a/drivers/gpu/msm/adreno_a6xx.h b/drivers/gpu/msm/adreno_a6xx.h
+index 20e9f46388df..3267213d7ce2 100644
+--- a/drivers/gpu/msm/adreno_a6xx.h
++++ b/drivers/gpu/msm/adreno_a6xx.h
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2017-2018,2020, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -103,7 +103,7 @@ struct cpu_gpu_lock {
+ /* Size of the performance counter save/restore block (in bytes) */
+ #define A6XX_CP_PERFCOUNTER_SAVE_RESTORE_SIZE   (4 * 1024)
+ 
+-#define A6XX_CP_RB_CNTL_DEFAULT ((1 << 27) | ((ilog2(4) << 8) & 0x1F00) | \
++#define A6XX_CP_RB_CNTL_DEFAULT (((ilog2(4) << 8) & 0x1F00) | \
+ 		(ilog2(KGSL_RB_DWORDS >> 1) & 0x3F))
+ 
+ /* Preemption functions */
+diff --git a/drivers/gpu/msm/adreno_a6xx_preempt.c b/drivers/gpu/msm/adreno_a6xx_preempt.c
+index c02af14413cd..89965f2c9b06 100644
+--- a/drivers/gpu/msm/adreno_a6xx_preempt.c
++++ b/drivers/gpu/msm/adreno_a6xx_preempt.c
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2017-2018,2020, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -341,8 +341,8 @@ void a6xx_preemption_trigger(struct adreno_device *adreno_dev)
+ 	kgsl_sharedmem_writel(device, &iommu->smmu_info,
+ 		PREEMPT_SMMU_RECORD(context_idr), contextidr);
+ 
+-	kgsl_sharedmem_readq(&preempt->scratch, &gpuaddr,
+-			next->id * sizeof(u64));
++	kgsl_sharedmem_readq(&device->scratch, &gpuaddr,
++		SCRATCH_PREEMPTION_CTXT_RESTORE_ADDR_OFFSET(next->id));
+ 
+ 	/*
+ 	 * Set a keepalive bit before the first preemption register write.
+@@ -542,10 +542,12 @@ unsigned int a6xx_preemption_pre_ibsubmit(
+ 			rb->perfcounter_save_restore_desc.gpuaddr);
+ 
+ 	if (context) {
++		struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+ 		struct adreno_context *drawctxt = ADRENO_CONTEXT(context);
+ 		struct adreno_ringbuffer *rb = drawctxt->rb;
+-		uint64_t dest = adreno_dev->preempt.scratch.gpuaddr +
+-			sizeof(u64) * rb->id;
++		uint64_t dest =
++			SCRATCH_PREEMPTION_CTXT_RESTORE_GPU_ADDR(device,
++			rb->id);
+ 
+ 		*cmds++ = cp_mem_packet(adreno_dev, CP_MEM_WRITE, 2, 2);
+ 		cmds += cp_gpuaddr(adreno_dev, cmds, dest);
+@@ -563,8 +565,9 @@ unsigned int a6xx_preemption_post_ibsubmit(struct adreno_device *adreno_dev,
+ 	struct adreno_ringbuffer *rb = adreno_dev->cur_rb;
+ 
+ 	if (rb) {
+-		uint64_t dest = adreno_dev->preempt.scratch.gpuaddr +
+-			sizeof(u64) * rb->id;
++		struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
++		uint64_t dest = SCRATCH_PREEMPTION_CTXT_RESTORE_GPU_ADDR(device,
++			rb->id);
+ 
+ 		*cmds++ = cp_mem_packet(adreno_dev, CP_MEM_WRITE, 2, 2);
+ 		cmds += cp_gpuaddr(adreno_dev, cmds, dest);
+@@ -716,7 +719,7 @@ static void a6xx_preemption_close(struct kgsl_device *device)
+ 	unsigned int i;
+ 
+ 	del_timer(&preempt->timer);
+-	kgsl_free_global(device, &preempt->scratch);
++	kgsl_free_global(device, &preempt->counters);
+ 	a6xx_preemption_iommu_close(adreno_dev);
+ 
+ 	FOR_EACH_RINGBUFFER(adreno_dev, rb, i) {
+@@ -746,19 +749,15 @@ int a6xx_preemption_init(struct adreno_device *adreno_dev)
+ 	setup_timer(&preempt->timer, _a6xx_preemption_timer,
+ 		(unsigned long) adreno_dev);
+ 
+-	/*
+-	 * Allocate a scratch buffer to keep the below table:
+-	 * Offset: What
+-	 * 0x0: Context Record address
+-	 * 0x10: Preemption Counters
+-	 */
+-	ret = kgsl_allocate_global(device, &preempt->scratch, PAGE_SIZE, 0, 0,
+-			"preemption_scratch");
++	/* Allocate mem for storing preemption counters */
++	ret = kgsl_allocate_global(device, &preempt->counters,
++		adreno_dev->num_ringbuffers *
++		A6XX_CP_CTXRECORD_PREEMPTION_COUNTER_SIZE, 0, 0,
++		"preemption_counters");
+ 	if (ret)
+ 		goto err;
+ 
+-	addr = preempt->scratch.gpuaddr +
+-		KGSL_PRIORITY_MAX_RB_LEVELS * sizeof(u64);
++	addr = preempt->counters.gpuaddr;
+ 
+ 	/* Allocate mem for storing preemption switch record */
+ 	FOR_EACH_RINGBUFFER(adreno_dev, rb, i) {
+diff --git a/drivers/gpu/msm/adreno_ioctl.c b/drivers/gpu/msm/adreno_ioctl.c
+index ff9a69a29130..82629c6fcf23 100644
+--- a/drivers/gpu/msm/adreno_ioctl.c
++++ b/drivers/gpu/msm/adreno_ioctl.c
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2002,2007-2018,2020, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2002,2007-2018, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -168,7 +168,7 @@ static long adreno_ioctl_preemption_counters_query(
+ 		levels_to_copy = gpudev->num_prio_levels;
+ 
+ 	if (copy_to_user((void __user *) (uintptr_t) read->counters,
+-			adreno_dev->preempt.scratch.hostptr,
++			adreno_dev->preempt.counters.hostptr,
+ 			levels_to_copy * size_level))
+ 		return -EFAULT;
+ 
+diff --git a/drivers/gpu/msm/adreno_pm4types.h b/drivers/gpu/msm/adreno_pm4types.h
+index cf30a834546b..2a330b4474aa 100644
+--- a/drivers/gpu/msm/adreno_pm4types.h
++++ b/drivers/gpu/msm/adreno_pm4types.h
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2002,2007-2017,2020, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2002,2007-2017, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -103,8 +103,6 @@
+ /* A5XX Enable yield in RB only */
+ #define CP_YIELD_ENABLE 0x1C
+ 
+-#define CP_WHERE_AM_I 0x62
+-
+ /* Enable/Disable/Defer A5x global preemption model */
+ #define CP_PREEMPT_ENABLE_GLOBAL    0x69
+ 
+diff --git a/drivers/gpu/msm/adreno_ringbuffer.c b/drivers/gpu/msm/adreno_ringbuffer.c
+index c37a3c2f703e..bff977d967f5 100644
+--- a/drivers/gpu/msm/adreno_ringbuffer.c
++++ b/drivers/gpu/msm/adreno_ringbuffer.c
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2002,2007-2020, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2002,2007-2019, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -181,7 +181,7 @@ void adreno_ringbuffer_submit(struct adreno_ringbuffer *rb,
+ 	adreno_ringbuffer_wptr(adreno_dev, rb);
+ }
+ 
+-int adreno_ringbuffer_submit_spin_nosync(struct adreno_ringbuffer *rb,
++int adreno_ringbuffer_submit_spin(struct adreno_ringbuffer *rb,
+ 		struct adreno_submit_time *time, unsigned int timeout)
+ {
+ 	struct adreno_device *adreno_dev = ADRENO_RB_DEVICE(rb);
+@@ -190,38 +190,6 @@ int adreno_ringbuffer_submit_spin_nosync(struct adreno_ringbuffer *rb,
+ 	return adreno_spin_idle(adreno_dev, timeout);
+ }
+ 
+-/*
+- * adreno_ringbuffer_submit_spin() - Submit the cmds and wait until GPU is idle
+- * @rb: Pointer to ringbuffer
+- * @time: Pointer to adreno_submit_time
+- * @timeout: timeout value in ms
+- *
+- * Add commands to the ringbuffer and wait until GPU goes to idle. This routine
+- * inserts a WHERE_AM_I packet to trigger a shadow rptr update. So, use
+- * adreno_ringbuffer_submit_spin_nosync() if the previous cmd in the RB is a
+- * CSY packet because CSY followed by WHERE_AM_I is not legal.
+- */
+-int adreno_ringbuffer_submit_spin(struct adreno_ringbuffer *rb,
+-		struct adreno_submit_time *time, unsigned int timeout)
+-{
+-	struct adreno_device *adreno_dev = ADRENO_RB_DEVICE(rb);
+-	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+-	unsigned int *cmds;
+-
+-	if (adreno_is_a3xx(adreno_dev))
+-		return adreno_ringbuffer_submit_spin_nosync(rb, time, timeout);
+-
+-	cmds = adreno_ringbuffer_allocspace(rb, 3);
+-	if (IS_ERR(cmds))
+-		return PTR_ERR(cmds);
+-
+-	*cmds++ = cp_packet(adreno_dev, CP_WHERE_AM_I, 2);
+-	cmds += cp_gpuaddr(adreno_dev, cmds,
+-			SCRATCH_RPTR_GPU_ADDR(device, rb->id));
+-
+-	return adreno_ringbuffer_submit_spin_nosync(rb, time, timeout);
+-}
+-
+ unsigned int *adreno_ringbuffer_allocspace(struct adreno_ringbuffer *rb,
+ 		unsigned int dwords)
+ {
+@@ -349,12 +317,11 @@ int adreno_ringbuffer_probe(struct adreno_device *adreno_dev, bool nopreempt)
+ 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+ 	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
+ 	int i;
+-	unsigned int priv = KGSL_MEMDESC_RANDOM | KGSL_MEMDESC_PRIVILEGED;
+ 	int status = -ENOMEM;
+ 
+ 	if (!adreno_is_a3xx(adreno_dev)) {
+ 		status = kgsl_allocate_global(device, &device->scratch,
+-				PAGE_SIZE, 0, priv, "scratch");
++				PAGE_SIZE, 0, KGSL_MEMDESC_RANDOM, "scratch");
+ 		if (status != 0)
+ 			return status;
+ 	}
+@@ -560,8 +527,6 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
+ 	if (gpudev->preemption_post_ibsubmit &&
+ 			adreno_is_preemption_enabled(adreno_dev))
+ 		total_sizedwords += 10;
+-	else if (!adreno_is_a3xx(adreno_dev))
+-		total_sizedwords += 3;
+ 
+ 	/*
+ 	 * a5xx uses 64 bit memory address. pm4 commands that involve read/write
+@@ -773,11 +738,6 @@ adreno_ringbuffer_addcmds(struct adreno_ringbuffer *rb,
+ 				adreno_is_preemption_enabled(adreno_dev))
+ 		ringcmds += gpudev->preemption_post_ibsubmit(adreno_dev,
+ 			ringcmds);
+-	else if (!adreno_is_a3xx(adreno_dev)) {
+-		*ringcmds++ = cp_packet(adreno_dev, CP_WHERE_AM_I, 2);
+-		ringcmds += cp_gpuaddr(adreno_dev, ringcmds,
+-				SCRATCH_RPTR_GPU_ADDR(device, rb->id));
+-	}
+ 
+ 	/*
+ 	 * If we have more ringbuffer commands than space reserved
+diff --git a/drivers/gpu/msm/adreno_ringbuffer.h b/drivers/gpu/msm/adreno_ringbuffer.h
+index ee617778a0cf..8e0c32108f96 100644
+--- a/drivers/gpu/msm/adreno_ringbuffer.h
++++ b/drivers/gpu/msm/adreno_ringbuffer.h
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2002,2007-2020, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2002,2007-2019, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -180,9 +180,6 @@ int adreno_ringbuffer_issue_internal_cmds(struct adreno_ringbuffer *rb,
+ void adreno_ringbuffer_submit(struct adreno_ringbuffer *rb,
+ 		struct adreno_submit_time *time);
+ 
+-int adreno_ringbuffer_submit_spin_nosync(struct adreno_ringbuffer *rb,
+-		struct adreno_submit_time *time, unsigned int timeout);
+-
+ int adreno_ringbuffer_submit_spin(struct adreno_ringbuffer *rb,
+ 		struct adreno_submit_time *time, unsigned int timeout);
+ 
+diff --git a/drivers/gpu/msm/kgsl.h b/drivers/gpu/msm/kgsl.h
+index 87bdde8b3924..8456be78e78a 100644
+--- a/drivers/gpu/msm/kgsl.h
++++ b/drivers/gpu/msm/kgsl.h
+@@ -1,4 +1,4 @@
+-/* Copyright (c) 2008-2020, The Linux Foundation. All rights reserved.
++/* Copyright (c) 2008-2019, The Linux Foundation. All rights reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 and
+@@ -71,11 +71,13 @@
+ /*
+  * SCRATCH MEMORY: The scratch memory is one page worth of data that
+  * is mapped into the GPU. This allows for some 'shared' data between
+- * the GPU and CPU.
++ * the GPU and CPU. For example, it will be used by the GPU to write
++ * each updated RPTR for each RB.
+  *
+  * Used Data:
+  * Offset: Length(bytes): What
+  * 0x0: 4 * KGSL_PRIORITY_MAX_RB_LEVELS: RB0 RPTR
++ * 0x10: 8 * KGSL_PRIORITY_MAX_RB_LEVELS: RB0 CTXT RESTORE ADDR
+  */
+ 
+ /* Shadow global helpers */
+@@ -83,6 +85,13 @@
+ #define SCRATCH_RPTR_GPU_ADDR(dev, id) \
+ 	((dev)->scratch.gpuaddr + SCRATCH_RPTR_OFFSET(id))
+ 
++#define SCRATCH_PREEMPTION_CTXT_RESTORE_ADDR_OFFSET(id) \
++	(SCRATCH_RPTR_OFFSET(KGSL_PRIORITY_MAX_RB_LEVELS) + \
++	((id) * sizeof(uint64_t)))
++#define SCRATCH_PREEMPTION_CTXT_RESTORE_GPU_ADDR(dev, id) \
++	((dev)->scratch.gpuaddr + \
++	SCRATCH_PREEMPTION_CTXT_RESTORE_ADDR_OFFSET(id))
++
+ /* Timestamp window used to detect rollovers (half of integer range) */
+ #define KGSL_TIMESTAMP_WINDOW 0x80000000
+ 
+-- 
+2.20.1
+
